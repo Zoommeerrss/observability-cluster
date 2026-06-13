@@ -61,6 +61,15 @@ EOF
 
 7.2. 🛠️ Execute esse comando para limpar os caracteres ocultos do Windows do seu arquivo
 
+Algumas vezes o ubuntu pode não conseguir identificar os arquivos executáveis e retornar um erro de arquivo não encontrado, mesmo com o arquivo existindo.
+
+```bash
+$ ./bootstrap.sh
+-bash: ./bootstrap.sh: cannot execute: required file not found
+```
+
+Para resolver isso, execute o comando abaixo:
+
 ```bash
 $ sed -i 's/\r//' ./observability-tools-install.sh
 ```
