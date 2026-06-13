@@ -1,0 +1,42 @@
+###################################
+# otel-collector-config.yaml      #
+###################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch:
+    exporters:
+      debug:
+        verbosity: detailed
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: "observability"
+    service:
+      telemetry: # NOVO: Força o coletor a expor suas próprias métricas de saúde
+        metrics:
+          address: "0.0.0.0:8888"
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug, prometheus]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
