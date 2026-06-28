@@ -1,17 +1,21 @@
 ##################################
 # otel-collector-monitor.yaml    #
 ##################################
-apiVersion: ://coreos.com
+
+apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
+
 metadata:
   name: opentelemetry-collector-monitor
   namespace: observability
   labels:
     release: kube-stack
+
 spec:
   selector:
     matchLabels:
       app: otel-collector
+
   endpoints:
     - port: metrics-prom
       interval: 15s

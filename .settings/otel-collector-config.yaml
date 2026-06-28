@@ -6,8 +6,13 @@ kind: ConfigMap
 metadata:
   name: otel-collector-config
   namespace: observability
+
 data:
   otel-collector-config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
     receivers:
       otlp:
         protocols:
@@ -15,28 +20,52 @@ data:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
+
     processors:
+
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 256
+        spike_limit_mib: 64
+
       batch:
+
     exporters:
+
       debug:
-        verbosity: detailed
+        verbosity: normal
+
       prometheus:
         endpoint: "0.0.0.0:8889"
         namespace: "observability"
+
+      otlp/tempo:
+        endpoint: tempo.observability.svc.cluster.local:4317
+        tls:
+          insecure: true
+
     service:
-      telemetry: # NOVO: Força o coletor a expor suas próprias métricas de saúde
+
+      extensions:
+        - health_check
+
+      telemetry:
         metrics:
           address: "0.0.0.0:8888"
+
       pipelines:
+
         metrics:
           receivers: [otlp]
-          processors: [batch]
-          exporters: [debug, prometheus]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus]
+
         traces:
           receivers: [otlp]
-          processors: [batch]
-          exporters: [debug]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/tempo, debug]
+
         logs:
           receivers: [otlp]
-          processors: [batch]
+          processors: [memory_limiter, batch]
           exporters: [debug]

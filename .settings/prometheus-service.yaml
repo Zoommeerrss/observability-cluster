@@ -1,68 +1,117 @@
 ##################################
 # prometheus-service.yaml        #
 ##################################
+
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: prometheus-sa
   namespace: observability
+
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: prometheus-cluster-role
+
 rules:
 - apiGroups: [""]
   resources:
-  - nodes
-  - nodes/metrics
-  - services
-  - endpoints
-  - pods
+    - nodes
+    - nodes/metrics
+    - services
+    - endpoints
+    - pods
   verbs: ["get", "list", "watch"]
+
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: prometheus-cluster-role-binding
+
 subjects:
 - kind: ServiceAccount
   name: prometheus-sa
   namespace: observability
+
 roleRef:
   kind: ClusterRole
   name: prometheus-cluster-role
   apiGroup: rbac.authorization.k8s.io
+
 ---
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
   namespace: observability
+
 data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
-
-    storage:
-      tsdb:
-        out_of_order_time_window: 1h
+      evaluation_interval: 15s
 
     scrape_configs:
-      # ALVO 1: Nós do Cluster (Métricas de infraestrutura via HTTPS)
+
+      # =========================
+      # OTel Collector (métricas)
+      # =========================
+      - job_name: 'opentelemetry-collector'
+        static_configs:
+          - targets: ['otel-collector:8889']
+
+      # =========================
+      # Kubernetes Nodes
+      # =========================
       - job_name: 'kubernetes-nodes'
         scheme: https
         tls_config:
           insecure_skip_verify: true
+
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+
         kubernetes_sd_configs:
           - role: node
 
-      # ALVO 2: OpenTelemetry Collector (Porta de Métricas dedicada e homologada)
-      - job_name: 'opentelemetry-collector'
-        static_configs:
-          - targets: ['otel-collector:8889']
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+
+      # =========================
+      # Kubernetes Pods (básico)
+      # =========================
+      - job_name: 'kubernetes-pods'
+
+        kubernetes_sd_configs:
+          - role: pod
+
+        relabel_configs:
+
+          # só scrape pods com annotation
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+
+          # path custom (/metrics por padrão)
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+
+          # porta dinâmica via annotation
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: (.+):(?:\d+);(\d+)
+            replacement: $1:$2
+            target_label: __address__
+
 ---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -70,33 +119,45 @@ metadata:
   namespace: observability
   labels:
     app: prometheus
+
 spec:
   replicas: 1
+
   selector:
     matchLabels:
       app: prometheus
+
   template:
     metadata:
       labels:
         app: prometheus
+
     spec:
       serviceAccountName: prometheus-sa
+
       containers:
         - name: prometheus
           image: prom/prometheus:v2.45.0
+
           args:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.retention.time=2d"
+            - "--web.enable-lifecycle"
+
           ports:
             - containerPort: 9090
+
           volumeMounts:
-            - name: prometheus-config
+            - name: config
               mountPath: /etc/prometheus
+
       volumes:
-        - name: prometheus-config
+        - name: config
           configMap:
             name: prometheus-config
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -104,11 +165,15 @@ metadata:
   namespace: observability
   labels:
     app: prometheus
+
 spec:
   type: NodePort
-  ports:
-  - port: 9090
-    targetPort: 9090
-    nodePort: 32090
+
   selector:
     app: prometheus
+
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+      nodePort: 32090

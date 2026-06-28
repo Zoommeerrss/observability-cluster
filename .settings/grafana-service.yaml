@@ -1,6 +1,77 @@
 ##################################
 # grafana-service.yaml           #
 ##################################
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: observability
+data:
+  datasources.yaml: |
+    apiVersion: 1
+
+    datasources:
+      # 1. MIMIR (Chaves corrigidas e unificadas em um único jsonData)
+      - name: Mimir
+        type: prometheus
+        access: proxy
+        url: "http://mimir:9009/prometheus"
+        isDefault: true
+        secureJsonData:
+          httpHeaderValue1: "anonymous"
+        jsonData:
+          httpMethod: POST
+          httpHeaderName1: "X-Scope-OrgID"
+
+      # 2. PROMETHEUS
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: "http://prometheus:9090"
+        isDefault: false
+        jsonData:
+          httpMethod: POST
+
+      # 3. LOKI
+      - name: Loki
+        type: loki
+        access: proxy
+        url: "http://loki:3100"
+        editable: true
+        jsonData:
+          derivedFields:
+            - datasourceUid: tempo_datasource
+              matcherRegex: '(?i)(?:trace_id|traceid|trace|tid)[=:]"??([a-f0-9]{32})"'
+              name: TraceID
+              url: '$${__value.raw}'
+
+      # 4. TEMPO
+      - name: Tempo
+        uid: tempo_datasource
+        type: tempo
+        access: proxy
+        url: "http://tempo:3200"
+        editable: true
+        jsonData:
+          httpMethod: POST
+          logsToTraces:
+            datasourceUid: Loki
+            tags:
+              - key: container
+                value: container
+              - key: pod
+                value: pod
+          serviceMap:
+            datasourceUid: Mimir
+          tracesToMetrics:
+            datasourceUid: Mimir
+            tags: [{ key: 'service.name', value: 'service' }]
+            queries:
+              - name: 'Request Rate'
+                query: 'sum(rate(tempo_spanmetrics_latency_count{$$__tags}[5m]))'
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,17 +89,51 @@ spec:
       labels:
         app: grafana
     spec:
+      # Garante que os arquivos criados pelo Grafana persistam com permissões corretas
+      securityContext:
+        fsGroup: 472
+        runAsUser: 472
       containers:
         - name: grafana
-          image: grafana/grafana:10.4.2  # OTIMIZAÇÃO: Versão fixa estável
+          image: grafana/grafana:10.4.2
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
+              name: grafana-port
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_LOG_LEVEL
+              value: info
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            # Otimização para os plugins avançados de trace/métricas funcionarem perfeitas
+            - name: GF_PLUGINS_ENABLE_ALPHA
+              value: "true"
           volumeMounts:
             - name: grafana-storage
               mountPath: /var/lib/grafana
+            - name: grafana-datasources
+              # Ajustado para a subpasta correta de provisionamento do Grafana
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+              subPath: datasources.yaml
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
       volumes:
         - name: grafana-storage
           emptyDir: {}
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
 ---
 apiVersion: v1
 kind: Service
@@ -37,9 +142,10 @@ metadata:
   namespace: observability
 spec:
   type: NodePort
-  ports:
-    - port: 3000
-      targetPort: 3000
-      nodePort: 32300  # ALTERADO: Porta livre para evitar conflitos internos
   selector:
     app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: 32300
